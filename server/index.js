@@ -107,7 +107,7 @@ io.on('connection', (socket) => {
     // Track user
     if (!roomUsers.has(roomId)) roomUsers.set(roomId, new Set());
     roomUsers.get(roomId).add(socket.id);
-    socketInfo.set(socket.id, { id: socket.id, username, email });
+    socketInfo.set(socket.id, { id: socket.id, username, email, roomId });
 
     console.log(`User ${username} (${email}) joined room: ${roomId}`);
 
@@ -117,13 +117,14 @@ io.on('connection', (socket) => {
     // Send message history
     const history = await dbOps.getMessageHistory(roomId);
     socket.emit('message-history', history.map(h => ({
+      id: h.id || h._id.toString(),
       message: h.encrypted_blob,
       sender: h.sender_name,
       senderEmail: h.sender_email,
       timestamp: h.timestamp,
       type: h.type,
       expiresAt: h.expires_at,
-      id: h._id.toString()
+      targetMessageId: h.targetMessageId || null
     })));
 
     // Notify others
@@ -178,6 +179,7 @@ io.on('connection', (socket) => {
     // Relay encrypted message blob
     io.to(roomId).emit('receive-message', {
       id: messageId,
+      roomId,
       message,
       sender,
       senderEmail,
