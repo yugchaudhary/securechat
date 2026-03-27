@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { GoogleLogin } from '@react-oauth/google';
 import { jwtDecode } from 'jwt-decode';
-import { Hash, Send, User, Shield, MessageSquare, LogOut, Lock, Users, Info } from 'lucide-react';
+import { Hash, Send, User, Shield, MessageSquare, LogOut, Lock, Users, Info, Bell } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { deriveKey, encryptMessage, decryptMessage } from './utils/crypto';
 
@@ -88,9 +88,8 @@ function App() {
     });
 
     socket.on('new-membership-request', (data) => {
-      if (userProfile?.email !== data.userEmail) {
-        fetchPendingRequests();
-      }
+      console.log('New request received:', data);
+      fetchPendingRequests();
     });
 
     return () => {
@@ -124,7 +123,7 @@ function App() {
   const fetchPendingRequests = async () => {
     if (!userProfile?.email) return;
     try {
-      const res = await fetch(`${SERVER_URL}/api/requests/${userProfile.email}`);
+      const res = await fetch(`${SERVER_URL}/api/pending/${userProfile.email}`);
       const data = await res.json();
       setPendingRequests(data);
     } catch (err) {
@@ -335,13 +334,16 @@ function App() {
               </div>
             </div>
             <div style={{ display: 'flex', gap: '10px' }}>
-              {pendingRequests.length > 0 && (
-                <button
-                  onClick={() => approveRequest(pendingRequests[0].room_id, pendingRequests[0].user_email)}
-                  style={{ background: 'var(--secondary)', border: 'none', color: 'white', padding: '8px 16px', borderRadius: '20px', fontSize: '0.75rem', fontWeight: '700', cursor: 'pointer', boxShadow: '0 4px 12px var(--secondary-glow)' }}
-                >
-                  Approve Request
-                </button>
+              {pendingRequests.length > 0 && userProfile.email === creatorEmail && (
+                <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(236, 72, 153, 0.1)', padding: '5px 15px', borderRadius: '25px', border: '1px solid var(--secondary)', gap: '12px', boxShadow: '0 0 15px var(--secondary-glow)' }} className="pulse-glow">
+                  <p style={{ fontSize: '0.75rem', fontWeight: '800', color: 'var(--secondary)' }}>{pendingRequests.length} REQUEST{pendingRequests.length > 1 ? 'S' : ''}</p>
+                  <button
+                    onClick={() => approveRequest(pendingRequests[0].room_id, pendingRequests[0].user_email)}
+                    style={{ background: 'var(--secondary)', border: 'none', color: 'white', padding: '5px 12px', borderRadius: '15px', fontSize: '0.7rem', fontWeight: '800', cursor: 'pointer' }}
+                  >
+                    Approve Next
+                  </button>
+                </div>
               )}
               <button
                 onClick={() => setShowActiveMembers(!showActiveMembers)}
