@@ -25,10 +25,9 @@ function App() {
   const [currentMessage, setCurrentMessage] = useState('');
   const [encryptionKey, setEncryptionKey] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [burnTimer, setBurnTimer] = useState('none'); // 'none', '1m', '5m', '1h'
-  const [showRoomDetails, setShowRoomDetails] = useState(false);
   const [editingName, setEditingName] = useState('');
   const [creatorEmail, setCreatorEmail] = useState('');
+  const [showActiveMembers, setShowActiveMembers] = useState(false);
 
   const scrollRef = useRef();
 
@@ -84,7 +83,8 @@ function App() {
         const decryptedHistory = await Promise.all(history.map(async (msg) => ({
           ...msg,
           sender: msg.sender_name,
-          message: await decryptMessage(msg.encrypted_blob, encryptionKey)
+          // Use msg.message instead of msg.encrypted_blob as mapped in index.js
+          message: await decryptMessage(msg.message, encryptionKey)
         })));
         setMessages(decryptedHistory);
       }
@@ -116,6 +116,7 @@ function App() {
         socket.emit('join-room', { roomId: cleanId, username: userProfile.name, email: userProfile.email });
       }
       fetchRooms();
+      setPendingRequests(prev => prev.filter(r => r.room_id.replace(/^#+/, '').toUpperCase() !== cleanId || r.user_email !== userEmail));
     });
 
     socket.on('new-membership-request', (data) => {
@@ -365,46 +366,6 @@ function App() {
                 ))}
               </div>
             </div>
-
-            {/* Active Members List */}
-            <div>
-              <p style={{ fontSize: '0.75rem', fontWeight: 'bold', opacity: 0.5, marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Active Members ({activeUsers.length})</p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {activeUsers.map(u => (
-                  <div key={u.id} className="glass-container" style={{ padding: '10px', borderRadius: '12px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--glass-border)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
-                      <div style={{ position: 'relative' }}>
-                        <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', fontWeight: 'bold' }}>
-                          {u.username[0].toUpperCase()}
-                        </div>
-                        <div style={{ position: 'absolute', bottom: '0', right: '0', width: '8px', height: '8px', background: '#10b981', borderRadius: '50%', border: '2px solid #0f172a' }}></div>
-                      </div>
-                      <div style={{ flex: 1, overflow: 'hidden' }}>
-                        <p style={{ fontSize: '0.85rem', fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.username} {u.email === creatorEmail && '👑'}</p>
-                        <p style={{ fontSize: '0.65rem', opacity: 0.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.email}</p>
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', gap: '5px' }}>
-                      <button
-                        onClick={() => startPrivateChat(u)}
-                        disabled={u.email === userProfile.email}
-                        style={{ flex: 1, background: 'rgba(99, 102, 241, 0.1)', border: 'none', borderRadius: '6px', color: '#818cf8', fontSize: '0.7rem', padding: '5px', cursor: 'pointer', opacity: u.email === userProfile.email ? 0.3 : 1 }}
-                      >
-                        Message
-                      </button>
-                      {userProfile.email === creatorEmail && u.email !== creatorEmail && (
-                        <button
-                          onClick={() => kickUser(u.email)}
-                          style={{ background: 'rgba(239, 68, 68, 0.1)', border: 'none', borderRadius: '6px', color: '#ef4444', fontSize: '0.7rem', padding: '5px 8px', cursor: 'pointer' }}
-                        >
-                          Kick
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
           </div>
 
           <div style={{ borderTop: '1px solid var(--glass-border)', paddingTop: '20px' }}>
@@ -414,156 +375,215 @@ function App() {
 
         {/* Chat Area */}
         <div className="chat-window glass-container animate-fade-in" style={{ flex: 1, margin: '15px 15px 15px 0' }}>
-          <div style={{ padding: '20px', borderBottom: '1px solid var(--glass-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <div style={{ padding: '8px', background: 'rgba(6, 182, 212, 0.1)', borderRadius: '10px' }}>
-                <MessageSquare color="#06b6d4" size={20} />
-              </div>
-              <div>
-                <h3 style={{ fontSize: '1rem' }}>{myRooms.find(r => r.id === currentRoomId)?.name || 'Chat'}</h3>
-                <span style={{ fontSize: '0.75rem', color: '#10b981', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <div style={{ width: '6px', height: '6px', background: '#10b981', borderRadius: '50%' }}></div>
-                  {activeUsers.length} Active • Secure E2EE
-                </span>
-              </div>
-            </div>
-
-            {/* Pending Requests Bubble */}
-            {pendingRequests.length > 0 && (
-              <div style={{ background: 'rgba(236, 72, 153, 0.1)', padding: '8px 12px', borderRadius: '12px', border: '1px solid var(--secondary)', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <p style={{ fontSize: '0.8rem', color: 'var(--secondary)', fontWeight: '600' }}>{pendingRequests.length} New Requests</p>
-                <div style={{ display: 'flex', gap: '5px' }}>
-                  {pendingRequests.slice(0, 2).map((req, i) => (
-                    <button
-                      key={i}
-                      onClick={() => approveRequest(req.room_id, req.user_email)}
-                      style={{ background: 'var(--secondary)', border: 'none', color: 'white', padding: '4px 8px', borderRadius: '6px', fontSize: '0.7rem', cursor: 'pointer' }}
-                    >
-                      Approve {req.user_email.split('@')[0]}
-                    </button>
-                  ))}
-                  {pendingRequests.length > 2 && <span style={{ fontSize: '0.7rem', opacity: 0.6 }}>+{pendingRequests.length - 2} more</span>}
-                </div>
-              </div>
-            )}
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <button
-                onClick={() => {
-                  const room = myRooms.find(r => r.id === currentRoomId);
-                  setEditingName(room?.name || '');
-                  setShowRoomDetails(true);
-                }}
-                className="btn-primary"
-                style={{ padding: '8px 12px', fontSize: '0.8rem', background: 'rgba(255,255,255,0.05)', color: 'white', border: '1px solid var(--glass-border)' }}
-              >
-                Room Info
-              </button>
-              <img src={userProfile.picture} alt={userProfile.name} style={{ width: '32px', height: '32px', borderRadius: '50%' }} />
-            </div>
-          </div>
-
-          <div className="messages-container" ref={scrollRef}>
-            <AnimatePresence>
-              {messages.map((msg, idx) => (
-                <motion.div
-                  key={idx}
-                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  transition={{ duration: 0.2 }}
-                  className={`message ${msg.sender === userProfile.name ? 'sent' : 'received'}`}
-                >
-                  <div style={{ fontSize: '0.7rem', marginBottom: '4px', opacity: 0.7, fontWeight: '600' }}>
-                    {msg.sender === userProfile.name ? 'You' : msg.sender}
-                  </div>
-                  <div>
-                    {msg.type === 'image' ? (
-                      <img src={msg.message} alt="Shared" style={{ maxWidth: '100%', borderRadius: '8px', marginTop: '5px' }} />
-                    ) : (
-                      msg.message
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '5px' }}>
-                    <div style={{ display: 'flex', gap: '5px' }}>
-                      <div className="message-meta">{msg.timestamp}</div>
-                      <button onClick={() => addReaction(msg.id, '❤️')} style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '0.7rem', opacity: 0.5 }}>❤️</button>
-                      <button onClick={() => addReaction(msg.id, '👍')} style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '0.7rem', opacity: 0.5 }}>👍</button>
-                    </div>
-                    {msg.expiresAt && <div style={{ fontSize: '0.6rem', color: '#f87171' }}>🔥 Auto-destruct @ {new Date(msg.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>}
-                  </div>
-                  {msg.reactions && (
-                    <div style={{ display: 'flex', gap: '5px', marginTop: '5px' }}>
-                      {msg.reactions.map((r, i) => <span key={i} style={{ fontSize: '0.8rem' }}>{r}</span>)}
-                    </div>
-                  )}
-                </motion.div>
-              ))}
-            </AnimatePresence>
-          </div>
-
-          <form onSubmit={sendMessage} style={{ padding: '20px', display: 'flex', gap: '12px', borderTop: '1px solid var(--glass-border)', alignItems: 'center' }}>
-            <label className="btn-primary" style={{ padding: '10px', cursor: 'pointer', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--glass-border)' }}>
-              <Hash size={20} />
-              <input type="file" onChange={handleFileUpload} accept="image/*" style={{ display: 'none' }} />
-            </label>
-
-            <select
-              value={burnTimer}
-              onChange={(e) => setBurnTimer(e.target.value)}
-              style={{ background: 'rgba(255,255,255,0.05)', color: 'white', border: '1px solid var(--glass-border)', borderRadius: '8px', padding: '10px', fontSize: '0.8rem' }}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <button
+              onClick={() => setShowActiveMembers(!showActiveMembers)}
+              className="btn-primary"
+              style={{ padding: '8px 12px', fontSize: '0.8rem', background: showActiveMembers ? 'var(--primary)' : 'rgba(255,255,255,0.05)', color: 'white', border: '1px solid var(--glass-border)' }}
             >
-              <option value="none">No Burn</option>
-              <option value="1m">1 min</option>
-              <option value="5m">5 mins</option>
-              <option value="1h">1 hour</option>
-            </select>
-
-            <input
-              className="input-field"
-              placeholder="Type a secure message..."
-              style={{ flex: 1 }}
-              value={currentMessage}
-              onChange={(e) => setCurrentMessage(e.target.value)}
-            />
-            <button className="btn-primary" type="submit" style={{ padding: '12px' }}>
-              <Send size={20} />
+              {activeUsers.length} Online
             </button>
-          </form>
+            <button
+              onClick={() => {
+                const room = myRooms.find(r => r.id === currentRoomId);
+                setEditingName(room?.name || '');
+                setShowRoomDetails(true);
+              }}
+              className="btn-primary"
+              style={{ padding: '8px 12px', fontSize: '0.8rem', background: 'rgba(255,255,255,0.05)', color: 'white', border: '1px solid var(--glass-border)' }}
+            >
+              Room Info
+            </button>
+            <img src={userProfile.picture} alt={userProfile.name} style={{ width: '32px', height: '32px', borderRadius: '50%' }} />
+          </div>
+        </div>
 
-          {/* Room Details Modal */}
-          {showRoomDetails && (
-            <div className="flex-center" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <div className="glass-container" style={{ padding: '30px', width: '350px' }}>
-                <h2 style={{ marginBottom: '20px' }}>Room Details</h2>
-                <div style={{ spaceY: '15px' }}>
-                  <div style={{ marginBottom: '15px' }}>
-                    <p style={{ fontSize: '0.8rem', opacity: 0.6 }}>Room Name</p>
-                    {userProfile.email === myRooms.find(r => r.id === currentRoomId)?.creator_email ? (
-                      <div style={{ display: 'flex', gap: '10px', marginTop: '5px' }}>
-                        <input className="input-field" value={editingName} onChange={e => setEditingName(e.target.value)} />
-                        <button onClick={updateRoomName} className="btn-primary">Save</button>
+        <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+          {/* Messages Area */}
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <div className="messages-container" ref={scrollRef} style={{ flex: 1 }}>
+              <AnimatePresence>
+                {messages.map((msg, idx) => (
+                  <motion.div
+                    key={idx}
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    transition={{ duration: 0.2 }}
+                    className={`message ${msg.sender === userProfile.name ? 'sent' : 'received'}`}
+                  >
+                    <div style={{ fontSize: '0.7rem', marginBottom: '4px', opacity: 0.7, fontWeight: '600' }}>
+                      {msg.sender === userProfile.name ? 'You' : msg.sender}
+                    </div>
+                    <div>
+                      {msg.type === 'image' ? (
+                        <img src={msg.message} alt="Shared" style={{ maxWidth: '100%', borderRadius: '8px', marginTop: '5px' }} />
+                      ) : (
+                        msg.message
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '5px' }}>
+                      <div style={{ display: 'flex', gap: '5px' }}>
+                        <div className="message-meta">{msg.timestamp}</div>
+                        <button onClick={() => addReaction(msg.id, '❤️')} style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '0.7rem', opacity: 0.5 }}>❤️</button>
+                        <button onClick={() => addReaction(msg.id, '👍')} style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '0.7rem', opacity: 0.5 }}>👍</button>
                       </div>
-                    ) : (
-                      <p style={{ fontWeight: '600' }}>{myRooms.find(r => r.id === currentRoomId)?.name}</p>
+                      {msg.expiresAt && <div style={{ fontSize: '0.6rem', color: '#f87171' }}>🔥 Auto-destruct @ {new Date(msg.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>}
+                    </div>
+                    {msg.reactions && (
+                      <div style={{ display: 'flex', gap: '5px', marginTop: '5px' }}>
+                        {msg.reactions.map((r, i) => <span key={i} style={{ fontSize: '0.8rem' }}>{r}</span>)}
+                      </div>
                     )}
-                  </div>
-                  <div style={{ marginBottom: '15px' }}>
-                    <p style={{ fontSize: '0.8rem', opacity: 0.6 }}>Room ID</p>
-                    <p style={{ fontWeight: '600' }}>#{currentRoomId}</p>
-                  </div>
-                  <div style={{ marginBottom: '15px' }}>
-                    <p style={{ fontSize: '0.8rem', opacity: 0.6, display: 'flex', alignItems: 'center', gap: '5px' }}>
-                      <Lock size={12} /> Encryption Key (Room Code)
-                    </p>
-                    <p style={{ fontWeight: '600', color: 'var(--primary)' }}>{myRooms.find(r => r.id === currentRoomId)?.room_code || 'Hidden'}</p>
-                  </div>
-                  <button onClick={() => setShowRoomDetails(false)} className="btn-primary" style={{ width: '100%', marginTop: '10px' }}>Close</button>
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+            </div>
+
+            {/* Input Area */}
+            <div style={{ padding: '20px', borderTop: '1px solid var(--glass-border)' }}>
+              <form onSubmit={sendMessage} style={{ display: 'flex', gap: '10px' }}>
+                <div style={{ position: 'relative' }}>
+                  <button type="button" className="btn-primary" style={{ padding: '10px' }}>
+                    <Hash size={20} />
+                  </button>
                 </div>
+                <select
+                  className="input-field"
+                  value={burnTimer}
+                  onChange={e => setBurnTimer(e.target.value)}
+                  style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--glass-border)', fontSize: '0.8rem', padding: '0 10px' }}
+                >
+                  <option value="none">No Burn</option>
+                  <option value="1m">1 Min</option>
+                  <option value="5m">5 Min</option>
+                  <option value="1h">1 Hour</option>
+                </select>
+                <input
+                  className="input-field"
+                  style={{ flex: 1 }}
+                  placeholder="Type a secure message..."
+                  value={currentMessage}
+                  onChange={(e) => setCurrentMessage(e.target.value)}
+                />
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <label className="btn-primary" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '10px' }}>
+                    <Send size={20} style={{ transform: 'rotate(-45deg)' }} />
+                    <input type="file" hidden accept="image/*" onChange={handleFileUpload} />
+                  </label>
+                  <button className="btn-primary" type="submit" style={{ padding: '10px 20px' }}>
+                    <Send size={20} />
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          {/* Active Members Sidebar (Right) */}
+          {showActiveMembers && (
+            <div className="animate-fade-in" style={{ width: '250px', borderLeft: '1px solid var(--glass-border)', background: 'rgba(255,255,255,0.02)', padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+              <p style={{ fontSize: '0.75rem', fontWeight: 'bold', opacity: 0.5, textTransform: 'uppercase' }}>Active Members</p>
+              <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {activeUsers.map(u => (
+                  <div key={u.id} className="glass-container" style={{ padding: '10px', borderRadius: '12px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--glass-border)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                      <div style={{ position: 'relative' }}>
+                        <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: 'var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem', fontWeight: 'bold' }}>
+                          {u.username[0].toUpperCase()}
+                        </div>
+                        <div style={{ position: 'absolute', bottom: '0', right: '0', width: '6px', height: '6px', background: '#10b981', borderRadius: '50%', border: '1.5px solid #0f172a' }}></div>
+                      </div>
+                      <div style={{ flex: 1, overflow: 'hidden' }}>
+                        <p style={{ fontSize: '0.75rem', fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.username} {u.email === creatorEmail && '👑'}</p>
+                        <p style={{ fontSize: '0.6rem', opacity: 0.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.email}</p>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                      <button
+                        onClick={() => startPrivateChat(u)}
+                        disabled={u.email === userProfile.email}
+                        style={{ flex: 1, background: 'rgba(99, 102, 241, 0.1)', border: 'none', borderRadius: '4px', color: '#818cf8', fontSize: '0.6rem', padding: '4px', cursor: 'pointer', opacity: u.email === userProfile.email ? 0.3 : 1 }}
+                      >
+                        Message
+                      </button>
+                      {userProfile.email === creatorEmail && u.email !== creatorEmail && (
+                        <button
+                          onClick={() => kickUser(u.email)}
+                          style={{ background: 'rgba(239, 68, 68, 0.1)', border: 'none', borderRadius: '4px', color: '#ef4444', fontSize: '0.6rem', padding: '4px 6px', cursor: 'pointer' }}
+                        >
+                          Kick
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}
         </div>
+
+        <form onSubmit={sendMessage} style={{ padding: '20px', display: 'flex', gap: '12px', borderTop: '1px solid var(--glass-border)', alignItems: 'center' }}>
+          <label className="btn-primary" style={{ padding: '10px', cursor: 'pointer', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--glass-border)' }}>
+            <Hash size={20} />
+            <input type="file" onChange={handleFileUpload} accept="image/*" style={{ display: 'none' }} />
+          </label>
+
+          <select
+            value={burnTimer}
+            onChange={(e) => setBurnTimer(e.target.value)}
+            style={{ background: 'rgba(255,255,255,0.05)', color: 'white', border: '1px solid var(--glass-border)', borderRadius: '8px', padding: '10px', fontSize: '0.8rem' }}
+          >
+            <option value="none">No Burn</option>
+            <option value="1m">1 min</option>
+            <option value="5m">5 mins</option>
+            <option value="1h">1 hour</option>
+          </select>
+
+          <input
+            className="input-field"
+            placeholder="Type a secure message..."
+            style={{ flex: 1 }}
+            value={currentMessage}
+            onChange={(e) => setCurrentMessage(e.target.value)}
+          />
+          <button className="btn-primary" type="submit" style={{ padding: '12px' }}>
+            <Send size={20} />
+          </button>
+        </form>
+
+        {/* Room Details Modal */}
+        {showRoomDetails && (
+          <div className="flex-center" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div className="glass-container" style={{ padding: '30px', width: '350px' }}>
+              <h2 style={{ marginBottom: '20px' }}>Room Details</h2>
+              <div style={{ spaceY: '15px' }}>
+                <div style={{ marginBottom: '15px' }}>
+                  <p style={{ fontSize: '0.8rem', opacity: 0.6 }}>Room Name</p>
+                  {userProfile.email === myRooms.find(r => r.id === currentRoomId)?.creator_email ? (
+                    <div style={{ display: 'flex', gap: '10px', marginTop: '5px' }}>
+                      <input className="input-field" value={editingName} onChange={e => setEditingName(e.target.value)} />
+                      <button onClick={updateRoomName} className="btn-primary">Save</button>
+                    </div>
+                  ) : (
+                    <p style={{ fontWeight: '600' }}>{myRooms.find(r => r.id === currentRoomId)?.name}</p>
+                  )}
+                </div>
+                <div style={{ marginBottom: '15px' }}>
+                  <p style={{ fontSize: '0.8rem', opacity: 0.6 }}>Room ID</p>
+                  <p style={{ fontWeight: '600' }}>#{currentRoomId}</p>
+                </div>
+                <div style={{ marginBottom: '15px' }}>
+                  <p style={{ fontSize: '0.8rem', opacity: 0.6, display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <Lock size={12} /> Encryption Key (Room Code)
+                  </p>
+                  <p style={{ fontWeight: '600', color: 'var(--primary)' }}>{myRooms.find(r => r.id === currentRoomId)?.room_code || 'Hidden'}</p>
+                </div>
+                <button onClick={() => setShowRoomDetails(false)} className="btn-primary" style={{ width: '100%', marginTop: '10px' }}>Close</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
+      </div >
     );
   }
 
