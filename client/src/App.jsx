@@ -28,6 +28,7 @@ function App() {
   const [burnTimer, setBurnTimer] = useState('none'); // 'none', '1m', '5m', '1h'
   const [showRoomDetails, setShowRoomDetails] = useState(false);
   const [editingName, setEditingName] = useState('');
+  const [creatorEmail, setCreatorEmail] = useState('');
 
   const scrollRef = useRef();
 
@@ -89,8 +90,19 @@ function App() {
       }
     });
 
-    socket.on('room-users', (users) => {
+    socket.on('room-users', ({ users, creatorEmail }) => {
       setActiveUsers(users);
+      setCreatorEmail(creatorEmail);
+    });
+
+    socket.on('kicked', () => {
+      alert('You have been removed from the room');
+      setIsJoined(false);
+      setMembershipStatus('none');
+    });
+
+    socket.on('request-approved-local', ({ roomId, userEmail }) => {
+      setPendingRequests(prev => prev.filter(r => r.roomId !== roomId || r.userEmail !== userEmail));
     });
 
     socket.on('membership-status', ({ status }) => {
@@ -119,6 +131,8 @@ function App() {
       socket.off('membership-status');
       socket.off('membership-approved');
       socket.off('new-membership-request');
+      socket.off('kicked');
+      socket.off('request-approved-local');
     };
   }, [encryptionKey, userProfile, currentRoomId, roomCode]);
 
@@ -189,6 +203,30 @@ function App() {
   const approveRequest = (roomId, userEmail) => {
     socket.emit('approve-request', { roomId, userEmail });
     setPendingRequests(prev => prev.filter(r => r.userEmail !== userEmail || r.roomId !== roomId));
+  };
+
+  const kickUser = (userEmail) => {
+    if (window.confirm(`Are you sure you want to remove ${userEmail}?`)) {
+      socket.emit('kick-user', { roomId: currentRoomId, userEmail });
+    }
+  };
+
+  const startPrivateChat = async (targetUser) => {
+    if (targetUser.email === userProfile.email) return;
+    const emails = [userProfile.email, targetUser.email].sort();
+    const dmRoomId = `DM-${emails[0].split('@')[0]}-${emails[1].split('@')[0]}`;
+    const dmCode = emails.join('-'); // Deterministic code for DMs
+
+    // We treat DMs as rooms that both are automatically members of
+    // In a real app, we'd need a separate 'dm' table, but for now we reuse room logic
+    // with a "silent" join
+    const key = await deriveKey(dmCode);
+    setEncryptionKey(key);
+    setCurrentRoomId(dmRoomId);
+    setRoomCode(dmCode);
+    setMembershipStatus('approved');
+    socket.emit('join-room', { roomId: dmRoomId, username: userProfile.name, email: userProfile.email });
+    setIsJoined(true);
   };
 
   const handleLoginSuccess = (credentialResponse) => {
@@ -299,27 +337,74 @@ function App() {
             </button>
           </div>
 
-          <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {myRooms.map(room => (
-              <div
-                key={room.id}
-                onClick={() => room.status === 'approved' && handleJoinRoom(room.id, roomCode)}
-                style={{
-                  padding: '12px',
-                  borderRadius: '12px',
-                  background: currentRoomId === room.id ? 'var(--primary)' : 'rgba(255,255,255,0.05)',
-                  cursor: 'pointer',
-                  transition: '0.2s',
-                  opacity: room.status === 'approved' ? 1 : 0.5
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <p style={{ fontWeight: '600', fontSize: '0.9rem' }}>{room.name || 'Chat'}</p>
-                  {room.status === 'pending' && <span style={{ fontSize: '0.6rem', background: '#f59e0b', padding: '2px 6px', borderRadius: '4px' }}>Pending</span>}
-                </div>
-                <p style={{ fontSize: '0.7rem', opacity: 0.6 }}>#{room.id}</p>
+          <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            {/* Room List */}
+            <div>
+              <p style={{ fontSize: '0.75rem', fontWeight: 'bold', opacity: 0.5, marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>My Rooms</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {myRooms.map(room => (
+                  <div
+                    key={room.id}
+                    onClick={() => room.status === 'approved' && handleJoinRoom(room.id, room.room_code)}
+                    style={{
+                      padding: '12px',
+                      borderRadius: '12px',
+                      background: currentRoomId === room.id ? 'var(--primary)' : 'rgba(255,255,255,0.05)',
+                      cursor: 'pointer',
+                      transition: '0.2s',
+                      opacity: room.status === 'approved' ? 1 : 0.5,
+                      border: '1px solid ' + (currentRoomId === room.id ? 'transparent' : 'var(--glass-border)')
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <p style={{ fontWeight: '600', fontSize: '0.85rem' }}>{room.name || 'Chat'}</p>
+                      {room.status === 'pending' && <span style={{ fontSize: '0.6rem', background: '#f59e0b', padding: '2px 6px', borderRadius: '4px' }}>Pending</span>}
+                    </div>
+                    <p style={{ fontSize: '0.65rem', opacity: 0.6 }}>#{room.id}</p>
+                  </div>
+                ))}
               </div>
-            ))}
+            </div>
+
+            {/* Active Members List */}
+            <div>
+              <p style={{ fontSize: '0.75rem', fontWeight: 'bold', opacity: 0.5, marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Active Members ({activeUsers.length})</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {activeUsers.map(u => (
+                  <div key={u.id} className="glass-container" style={{ padding: '10px', borderRadius: '12px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--glass-border)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                      <div style={{ position: 'relative' }}>
+                        <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', fontWeight: 'bold' }}>
+                          {u.username[0].toUpperCase()}
+                        </div>
+                        <div style={{ position: 'absolute', bottom: '0', right: '0', width: '8px', height: '8px', background: '#10b981', borderRadius: '50%', border: '2px solid #0f172a' }}></div>
+                      </div>
+                      <div style={{ flex: 1, overflow: 'hidden' }}>
+                        <p style={{ fontSize: '0.85rem', fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.username} {u.email === creatorEmail && '👑'}</p>
+                        <p style={{ fontSize: '0.65rem', opacity: 0.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.email}</p>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '5px' }}>
+                      <button
+                        onClick={() => startPrivateChat(u)}
+                        disabled={u.email === userProfile.email}
+                        style={{ flex: 1, background: 'rgba(99, 102, 241, 0.1)', border: 'none', borderRadius: '6px', color: '#818cf8', fontSize: '0.7rem', padding: '5px', cursor: 'pointer', opacity: u.email === userProfile.email ? 0.3 : 1 }}
+                      >
+                        Message
+                      </button>
+                      {userProfile.email === creatorEmail && u.email !== creatorEmail && (
+                        <button
+                          onClick={() => kickUser(u.email)}
+                          style={{ background: 'rgba(239, 68, 68, 0.1)', border: 'none', borderRadius: '6px', color: '#ef4444', fontSize: '0.7rem', padding: '5px 8px', cursor: 'pointer' }}
+                        >
+                          Kick
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
 
           <div style={{ borderTop: '1px solid var(--glass-border)', paddingTop: '20px' }}>
@@ -346,13 +431,19 @@ function App() {
             {/* Pending Requests Bubble */}
             {pendingRequests.length > 0 && (
               <div style={{ background: 'rgba(236, 72, 153, 0.1)', padding: '8px 12px', borderRadius: '12px', border: '1px solid var(--secondary)', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <p style={{ fontSize: '0.8rem', color: 'var(--secondary)', fontWeight: '600' }}>{pendingRequests.length} Join Requests</p>
-                <button
-                  onClick={() => approveRequest(pendingRequests[0].room_id, pendingRequests[0].user_email)}
-                  style={{ background: 'var(--secondary)', border: 'none', color: 'white', padding: '4px 8px', borderRadius: '6px', fontSize: '0.7rem', cursor: 'pointer' }}
-                >
-                  Approve {pendingRequests[0].user_email.split('@')[0]}
-                </button>
+                <p style={{ fontSize: '0.8rem', color: 'var(--secondary)', fontWeight: '600' }}>{pendingRequests.length} New Requests</p>
+                <div style={{ display: 'flex', gap: '5px' }}>
+                  {pendingRequests.slice(0, 2).map((req, i) => (
+                    <button
+                      key={i}
+                      onClick={() => approveRequest(req.room_id, req.user_email)}
+                      style={{ background: 'var(--secondary)', border: 'none', color: 'white', padding: '4px 8px', borderRadius: '6px', fontSize: '0.7rem', cursor: 'pointer' }}
+                    >
+                      Approve {req.user_email.split('@')[0]}
+                    </button>
+                  ))}
+                  {pendingRequests.length > 2 && <span style={{ fontSize: '0.7rem', opacity: 0.6 }}>+{pendingRequests.length - 2} more</span>}
+                </div>
               </div>
             )}
 
@@ -552,9 +643,67 @@ function App() {
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: '10px' }}>
-            <button className="btn-primary" style={{ flex: 1 }} onClick={() => { setShowCreateModal('create'); setCurrentRoomId(''); }} disabled={!userProfile}>Create Room</button>
-            <button className="btn-primary" style={{ flex: 1, background: 'rgba(255,255,255,0.05)', color: 'white', border: '1px solid var(--glass-border)' }} onClick={() => { setShowCreateModal('join'); setCurrentRoomId(''); }} disabled={!userProfile}>Join Room</button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '25px', marginTop: '10px' }}>
+            {/* Join Room Form */}
+            <div style={{ padding: '20px', background: 'rgba(255,255,255,0.03)', borderRadius: '15px', border: '1px solid var(--glass-border)' }}>
+              <p style={{ fontSize: '0.85rem', fontWeight: '600', marginBottom: '15px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Hash size={16} color="var(--primary)" /> Join an Existing Room
+              </p>
+              <form onSubmit={(e) => { e.preventDefault(); handleJoinRoom(currentRoomId, roomCode); }} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <input
+                  className="input-field"
+                  placeholder="Room ID (e.g. #ABCDEF)"
+                  value={currentRoomId}
+                  onChange={e => setCurrentRoomId(e.target.value.toUpperCase())}
+                  style={{ fontSize: '0.85rem' }}
+                  required
+                />
+                <input
+                  className="input-field"
+                  placeholder="Encryption Key (Room Code)"
+                  type="password"
+                  value={roomCode}
+                  onChange={e => setRoomCode(e.target.value)}
+                  style={{ fontSize: '0.85rem' }}
+                  required
+                />
+                <button className="btn-primary" type="submit" disabled={!userProfile} style={{ padding: '10px' }}>Join Securely</button>
+              </form>
+            </div>
+
+            {/* Create Room Form */}
+            <div style={{ padding: '20px', background: 'rgba(255,255,255,0.03)', borderRadius: '15px', border: '1px solid var(--glass-border)' }}>
+              <p style={{ fontSize: '0.85rem', fontWeight: '600', marginBottom: '15px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <MessageSquare size={16} color="var(--primary)" /> Create a New Room
+              </p>
+              <form onSubmit={handleCreateRoom} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <input
+                  className="input-field"
+                  placeholder="Room Name"
+                  value={roomName}
+                  onChange={e => setRoomName(e.target.value)}
+                  style={{ fontSize: '0.85rem' }}
+                  required
+                />
+                <input
+                  className="input-field"
+                  placeholder="Room ID (Custom or Auto)"
+                  value={currentRoomId}
+                  onChange={e => setCurrentRoomId(e.target.value.toUpperCase())}
+                  style={{ fontSize: '0.85rem' }}
+                />
+                <input
+                  className="input-field"
+                  placeholder="Encryption Key (Room Code)"
+                  type="password"
+                  value={roomCode}
+                  onChange={e => setRoomCode(e.target.value)}
+                  style={{ fontSize: '0.85rem' }}
+                  required
+                />
+                <button className="btn-primary" type="submit" disabled={!userProfile} style={{ padding: '10px' }}>Create Room</button>
+              </form>
+            </div>
           </div>
 
           {/* Recently Joined List */}
@@ -567,12 +716,13 @@ function App() {
                     key={room.id}
                     onClick={() => {
                       setCurrentRoomId(room.id);
-                      setShowCreateModal('join');
+                      setRoomCode(room.room_code || ''); // Helper if stored locally
                     }}
                     className="glass-container"
-                    style={{ textAlign: 'left', padding: '10px', fontSize: '0.85rem', width: '100%', border: '1px solid var(--glass-border)', cursor: 'pointer' }}
+                    style={{ textAlign: 'left', padding: '12px', fontSize: '0.85rem', width: '100%', border: '1px solid var(--glass-border)', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
                   >
-                    {room.name || 'Chat'} (#{room.id})
+                    <span>{room.name || 'Chat'} (#{room.id})</span>
+                    <Hash size={14} style={{ opacity: 0.4 }} />
                   </button>
                 ))}
               </div>

@@ -31,11 +31,16 @@ const socketInfo = new Map(); // socketId -> { roomId, username, email }
 let messageCounter = Date.now();
 function getNextId() { return (messageCounter++).toString(36); }
 
-function updateRoomUsers(roomId) {
+async function updateRoomUsers(roomId) {
   const users = Array.from(roomUsers.get(roomId) || [])
     .map(id => socketInfo.get(id))
     .filter(Boolean);
-  io.to(roomId).emit('room-users', users);
+
+  const room = await dbOps.getRoom(roomId);
+  io.to(roomId).emit('room-users', {
+    users,
+    creatorEmail: room?.creator_email
+  });
 }
 
 const PORT = process.env.PORT || 3001;
@@ -130,8 +135,39 @@ io.on('connection', (socket) => {
 
   socket.on('approve-request', async ({ roomId, userEmail }) => {
     await dbOps.approveMembership(roomId, userEmail);
-    // Notify the specific user if they are online (we can use room broadcasting or specific socket IDs)
     io.emit('membership-approved', { roomId, userEmail });
+    // Also notify the admin themselves so they can clear UI popups
+    socket.emit('request-approved-local', { roomId, userEmail });
+  });
+
+  socket.on('kick-user', async ({ roomId, userEmail }) => {
+    const room = await dbOps.getRoom(roomId);
+    if (socket.userEmail === room.creator_email) {
+      // Find the socket ID of the user being kicked
+      for (const [sId, info] of socketInfo.entries()) {
+        if (info.email === userEmail && info.roomId === roomId) {
+          const targetSocket = io.sockets.sockets.get(sId);
+          if (targetSocket) {
+            targetSocket.leave(roomId);
+            targetSocket.emit('kicked', { roomId });
+          }
+          break;
+        }
+      }
+    }
+  });
+
+  socket.on('leave-room', ({ roomId }) => {
+    if (roomId) {
+      socket.leave(roomId);
+      const users = roomUsers.get(roomId);
+      if (users) {
+        users.delete(socket.id);
+        updateRoomUsers(roomId);
+      }
+      socketInfo.delete(socket.id);
+      socket.roomId = null;
+    }
   });
 
   socket.on('send-message', async ({ roomId, message, sender, senderEmail, timestamp, type = 'text', expiresAt = null, targetMessageId = null }) => {
@@ -154,15 +190,12 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     const info = socketInfo.get(socket.id);
-    if (info && info.roomId) {
-      const users = roomUsers.get(info.roomId);
+    if (info) {
+      const { roomId } = info;
+      const users = roomUsers.get(roomId);
       if (users) {
         users.delete(socket.id);
-        if (users.size === 0) {
-          roomUsers.delete(info.roomId);
-        } else {
-          updateRoomUsers(info.roomId);
-        }
+        updateRoomUsers(roomId);
       }
       socketInfo.delete(socket.id);
     }
