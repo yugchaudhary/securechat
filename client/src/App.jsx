@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { GoogleLogin } from '@react-oauth/google';
 import { jwtDecode } from 'jwt-decode';
-import { Hash, Send, User, Shield, MessageSquare, LogOut, Lock, Users, Info, Bell } from 'lucide-react';
+import { Hash, Send, User, Shield, MessageSquare, LogOut, Lock, Users, Info, Bell, Plus, LogIn } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { deriveKey, encryptMessage, decryptMessage } from './utils/crypto';
 
@@ -26,7 +26,6 @@ function App() {
   const [encryptionKey, setEncryptionKey] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showRoomDetails, setShowRoomDetails] = useState(false);
-  const [editingName, setEditingName] = useState('');
   const [creatorEmail, setCreatorEmail] = useState('');
   const [showActiveMembers, setShowActiveMembers] = useState(false);
   const [burnTimer, setBurnTimer] = useState('none');
@@ -43,21 +42,37 @@ function App() {
   useEffect(() => {
     socket.on('receive-message', async (data) => {
       if (data.roomId === currentRoomId && encryptionKey) {
-        let displayMessage = data.message;
-        if (data.type !== 'reaction') {
-          displayMessage = await decryptMessage(data.message, encryptionKey);
+        if (data.type === 'reaction') {
+          setMessages(prev => prev.map(m => m.id === data.targetMessageId ? { ...m, reactions: [...(m.reactions || []), data.message] } : m));
+          return;
         }
-        setMessages((prev) => [...prev, { ...data, message: displayMessage }]);
+
+        const displayMessage = await decryptMessage(data.message, encryptionKey);
+        setMessages((prev) => [...prev, { ...data, message: displayMessage, reactions: [] }]);
       }
     });
 
     socket.on('message-history', async (history) => {
       if (encryptionKey) {
-        const decryptedHistory = await Promise.all(history.map(async (msg) => ({
+        const processed = [];
+        const reactions = [];
+        history.forEach(m => {
+          if (m.type === 'reaction') reactions.push(m);
+          else processed.push({ ...m, id: m.id || m._id, reactions: [] });
+        });
+
+        const decryptedHistory = await Promise.all(processed.map(async (msg) => ({
           ...msg,
-          sender: msg.sender_name,
-          message: msg.type === 'reaction' ? msg.message : await decryptMessage(msg.message, encryptionKey)
+          sender: msg.sender_name || msg.sender,
+          message: await decryptMessage(msg.message, encryptionKey)
         })));
+
+        // Attach reactions
+        reactions.forEach(r => {
+          const target = decryptedHistory.find(m => m.id === r.targetMessageId);
+          if (target) target.reactions.push(r.message);
+        });
+
         setMessages(decryptedHistory);
       }
     });
@@ -87,8 +102,7 @@ function App() {
       setPendingRequests(prev => prev.filter(r => r.room_id.replace(/^#+/, '').toUpperCase() !== cleanId || r.user_email !== userEmail));
     });
 
-    socket.on('new-membership-request', (data) => {
-      console.log('New request received:', data);
+    socket.on('new-membership-request', () => {
       fetchPendingRequests();
     });
 
@@ -134,7 +148,7 @@ function App() {
   const handleCreateRoom = async (e) => {
     e.preventDefault();
     if (!roomName || !roomCode) return;
-    const cleanId = currentRoomId.replace(/^#+/, '').toUpperCase() || Math.random().toString(36).substring(7).toUpperCase();
+    const cleanId = (currentRoomId || Math.random().toString(36).substring(7)).replace(/^#+/, '').toUpperCase();
 
     try {
       const res = await fetch(`${SERVER_URL}/api/rooms/create`, {
@@ -234,7 +248,9 @@ function App() {
       expiresAt = new Date(Date.now() + mins * 60000).toISOString();
     }
 
+    const tempId = Date.now().toString();
     const messageData = {
+      id: tempId,
       roomId: currentRoomId,
       message: encryptedContent,
       sender: userProfile.name,
@@ -245,7 +261,7 @@ function App() {
     };
 
     socket.emit('send-message', messageData);
-    setMessages((prev) => [...prev, { ...messageData, message: currentMessage }]);
+    setMessages((prev) => [...prev, { ...messageData, message: currentMessage, reactions: [] }]);
     setCurrentMessage('');
   };
 
@@ -265,7 +281,7 @@ function App() {
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       };
       socket.emit('send-message', messageData);
-      setMessages(prev => [...prev, { ...messageData, message: base64 }]);
+      setMessages(prev => [...prev, { ...messageData, message: base64, reactions: [] }]);
     };
     reader.readAsDataURL(file);
   };
@@ -280,23 +296,31 @@ function App() {
       targetMessageId: messageId,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     });
+    // Local update
+    setMessages(prev => prev.map(m => m.id === messageId ? { ...m, reactions: [...(m.reactions || []), emoji] } : m));
   };
 
   // 1. Chat View
   if (isJoined && membershipStatus === 'approved') {
     return (
-      <div style={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden' }}>
+      <div style={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden', padding: '20px', gap: '20px' }}>
         {/* Sidebar */}
-        <div className="glass-container" style={{ width: '280px', margin: '20px', display: 'flex', flexDirection: 'column', padding: '24px', gap: '24px' }}>
+        <div className="glass-container" style={{ width: '300px', display: 'flex', flexDirection: 'column', padding: '24px', gap: '24px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <h2 className="gradient-text" style={{ fontSize: '1.4rem', fontWeight: '800' }}>SecureChat</h2>
-            <button onClick={() => setShowCreateModal('create')} className="btn-primary" style={{ borderRadius: '50%', width: '36px', height: '36px', padding: 0 }}>
-              <Hash size={18} />
-            </button>
+            <Shield size={24} color="#6366f1" className="pulse-glow" style={{ borderRadius: '50%' }} />
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <p style={{ fontSize: '0.7rem', fontWeight: '800', opacity: 0.4, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Dashboard</p>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button onClick={() => setShowCreateModal('create')} className="btn-primary" style={{ flex: 1, padding: '12px', fontSize: '0.8rem' }}><Plus size={16} /> Create</button>
+              <button onClick={() => setShowCreateModal('join')} className="btn-primary" style={{ flex: 1, padding: '12px', fontSize: '0.8rem', background: 'rgba(255,255,255,0.05)', boxShadow: 'none', border: '1px solid var(--glass-border)' }}><LogIn size={16} /> Join</button>
+            </div>
           </div>
 
           <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <p style={{ fontSize: '0.7rem', fontWeight: '800', opacity: 0.4, textTransform: 'uppercase', letterSpacing: '0.1em' }}>My Channels</p>
+            <p style={{ fontSize: '0.7rem', fontWeight: '800', opacity: 0.4, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Active Rooms</p>
             {myRooms.map(room => (
               <div
                 key={room.id}
@@ -308,122 +332,125 @@ function App() {
                   background: currentRoomId === room.id ? 'rgba(99, 102, 241, 0.1)' : 'rgba(255,255,255,0.02)',
                   borderColor: currentRoomId === room.id ? 'var(--primary)' : 'var(--glass-border)',
                   opacity: room.status === 'approved' ? 1 : 0.5,
-                  transition: '0.3s'
+                  borderRadius: '16px'
                 }}
               >
-                <p style={{ fontWeight: '700', fontSize: '0.9rem' }}>{room.name || 'Chat'}</p>
-                <p style={{ fontSize: '0.7rem', opacity: 0.5 }}>#{room.id}</p>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: currentRoomId === room.id ? 'var(--primary)' : 'rgba(255,255,255,0.2)' }}></div>
+                  <p style={{ fontWeight: '700', fontSize: '0.85rem' }}>{room.name || 'Chat'}</p>
+                </div>
+                <p style={{ fontSize: '0.65rem', opacity: 0.5, marginLeft: '18px' }}>#{room.id}</p>
               </div>
             ))}
           </div>
-          <button onClick={handleLogout} className="btn-primary" style={{ background: 'rgba(255,68,68,0.1)', color: '#ff4444', border: '1px solid rgba(255,68,68,0.2)', boxShadow: 'none' }}>Logout</button>
+
+          <div style={{ padding: '16px', background: 'rgba(255,255,255,0.02)', borderRadius: '20px', border: '1px solid var(--glass-border)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <img src={userProfile.picture} style={{ width: '36px', height: '36px', borderRadius: '50%' }} alt="" />
+              <div style={{ flex: 1, overflow: 'hidden' }}>
+                <p style={{ fontSize: '0.85rem', fontWeight: '700', textOverflow: 'ellipsis', overflow: 'hidden' }}>{userProfile.name}</p>
+                <p style={{ fontSize: '0.7rem', opacity: 0.4 }}>Admin View</p>
+              </div>
+              <button onClick={handleLogout} style={{ background: 'transparent', border: 'none', color: '#ff4444', cursor: 'pointer' }}><LogOut size={18} /></button>
+            </div>
+          </div>
         </div>
 
         {/* Chat Main Area */}
-        <div className="glass-container" style={{ flex: 1, margin: '20px 20px 20px 0', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div className="glass-container" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {/* Header */}
           <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--glass-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.01)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
               <div style={{ padding: '10px', background: 'rgba(99, 102, 241, 0.1)', borderRadius: '12px' }}><MessageSquare size={20} color="#6366f1" /></div>
               <div>
-                <h3 style={{ fontSize: '1.1rem', fontWeight: '700' }}>{myRooms.find(r => r.id === currentRoomId)?.name || 'E2EE Workspace'}</h3>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: '800' }}>{myRooms.find(r => r.id === currentRoomId)?.name || 'E2EE Mesh'}</h3>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <div style={{ width: '6px', height: '6px', background: '#10b981', borderRadius: '50%' }}></div>
-                  <p style={{ fontSize: '0.75rem', color: '#10b981', fontWeight: '600' }}>#{currentRoomId} • Online</p>
+                  <p style={{ fontSize: '0.75rem', color: '#10b981', fontWeight: '600' }}>#{currentRoomId} • Synchronized</p>
                 </div>
               </div>
             </div>
             <div style={{ display: 'flex', gap: '10px' }}>
               {pendingRequests.length > 0 && userProfile.email === creatorEmail && (
-                <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(236, 72, 153, 0.1)', padding: '5px 15px', borderRadius: '25px', border: '1px solid var(--secondary)', gap: '12px', boxShadow: '0 0 15px var(--secondary-glow)' }} className="pulse-glow">
-                  <p style={{ fontSize: '0.75rem', fontWeight: '800', color: 'var(--secondary)' }}>{pendingRequests.length} REQUEST{pendingRequests.length > 1 ? 'S' : ''}</p>
-                  <button
-                    onClick={() => approveRequest(pendingRequests[0].room_id, pendingRequests[0].user_email)}
-                    style={{ background: 'var(--secondary)', border: 'none', color: 'white', padding: '5px 12px', borderRadius: '15px', fontSize: '0.7rem', fontWeight: '800', cursor: 'pointer' }}
-                  >
-                    Approve Next
-                  </button>
+                <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(236, 72, 153, 0.1)', padding: '5px 15px', borderRadius: '25px', border: '1px solid var(--secondary)', gap: '12px' }} className="pulse-glow">
+                  <Bell size={14} color="var(--secondary)" />
+                  <p style={{ fontSize: '0.7rem', fontWeight: '800', color: 'var(--secondary)' }}>{pendingRequests.length} REQUEST{pendingRequests.length > 1 ? 'S' : ''}</p>
+                  <button onClick={() => approveRequest(pendingRequests[0].room_id, pendingRequests[0].user_email)} style={{ background: 'var(--secondary)', border: 'none', color: 'white', padding: '4px 10px', borderRadius: '12px', fontSize: '0.65rem', fontWeight: '800', cursor: 'pointer' }}>Approve</button>
                 </div>
               )}
-              <button
-                onClick={() => setShowActiveMembers(!showActiveMembers)}
-                className="btn-primary"
-                style={{ background: showActiveMembers ? 'var(--primary)' : 'rgba(255,255,255,0.05)', padding: '10px 18px', fontSize: '0.85rem', boxShadow: showActiveMembers ? '' : 'none' }}
-              >
-                <Users size={18} /> {activeUsers.length} Online
+              <button onClick={() => setShowActiveMembers(!showActiveMembers)} className="btn-primary" style={{ background: showActiveMembers ? 'var(--primary)' : 'rgba(255,255,255,0.05)', padding: '10px 18px', fontSize: '0.85rem', boxShadow: 'none' }}>
+                <Users size={18} /> {activeUsers.length}
               </button>
-              <button
-                onClick={() => setShowRoomDetails(true)}
-                className="btn-primary"
-                style={{ background: 'rgba(255,255,255,0.05)', padding: '10px', boxShadow: 'none' }}
-              >
-                <Info size={18} />
-              </button>
+              <button onClick={() => setShowRoomDetails(true)} className="btn-primary" style={{ background: 'rgba(255,255,255,0.05)', padding: '10px', boxShadow: 'none' }}><Info size={18} /></button>
             </div>
           </div>
 
           <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-            {/* Messages Area */}
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-              <div className="messages-container" ref={scrollRef} style={{ flex: 1, padding: '24px' }}>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
+              <div className="messages-container" ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: '24px', display: 'flex', flexDirection: 'column' }}>
                 <AnimatePresence>
                   {messages.map((msg, idx) => (
-                    <motion.div key={idx} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className={`message ${msg.sender === userProfile.name ? 'sent' : 'received'}`}>
-                      <p style={{ fontSize: '0.7rem', fontWeight: '800', marginBottom: '4px', opacity: 0.5, letterSpacing: '0.02em' }}>{msg.sender}</p>
-                      <div style={{ fontSize: '0.95rem', lineHeight: '1.5' }}>
+                    <motion.div key={idx} initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className={`message ${msg.sender === userProfile.name ? 'sent' : 'received'}`}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', alignItems: 'center' }}>
+                        <span style={{ fontSize: '0.75rem', fontWeight: '800', opacity: 0.6 }}>{msg.sender === userProfile.name ? 'You' : msg.sender}</span>
+                        <span style={{ fontSize: '0.6rem', opacity: 0.3 }}>{msg.timestamp}</span>
+                      </div>
+                      <div style={{ fontSize: '0.95rem', lineHeight: '1.6', color: '#f8fafc' }}>
                         {msg.type === 'image' ? <img src={msg.message} style={{ maxWidth: '100%', borderRadius: '12px', margin: '8px 0' }} alt="" /> : msg.message}
                       </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px' }}>
-                        <span style={{ fontSize: '0.65rem', opacity: 0.4 }}>{msg.timestamp}</span>
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                          <button onClick={() => addReaction(msg.id, '❤️')} style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '0.8rem', opacity: 0.5 }}>❤️</button>
-                          {msg.expiresAt && <span style={{ fontSize: '0.65rem', color: '#ff4444', fontWeight: '700' }}>🔥 {new Date(msg.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
+
+                      {/* Reactions Badges */}
+                      {(msg.reactions && msg.reactions.length > 0) && (
+                        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '10px' }}>
+                          {msg.reactions.map((r, i) => <span key={i} style={{ padding: '2px 8px', background: 'rgba(255,255,255,0.05)', borderRadius: '10px', fontSize: '0.8rem' }}>{r}</span>)}
                         </div>
+                      )}
+
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px', gap: '8px' }}>
+                        <button onClick={() => addReaction(msg.id, '❤️')} style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '0.8rem', opacity: 0.4 }}>❤️</button>
+                        <button onClick={() => addReaction(msg.id, '👍')} style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '0.8rem', opacity: 0.4 }}>👍</button>
+                        {msg.expiresAt && <span style={{ fontSize: '0.6rem', color: '#ff4444', fontWeight: '700' }}>🔥 {new Date(msg.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
                       </div>
                     </motion.div>
                   ))}
                 </AnimatePresence>
               </div>
 
-              {/* Chat Input */}
-              <form onSubmit={sendMessage} style={{ padding: '24px', borderTop: '1px solid var(--glass-border)', display: 'flex', gap: '12px', alignItems: 'center', background: 'rgba(255,255,255,0.01)' }}>
-                <select
-                  value={burnTimer}
-                  onChange={e => setBurnTimer(e.target.value)}
-                  className="input-field"
-                  style={{ padding: '10px', fontSize: '0.8rem', width: 'auto' }}
-                >
-                  <option value="none">No Burn</option>
-                  <option value="1m">1m</option>
-                  <option value="5m">5m</option>
-                  <option value="1h">1h</option>
-                </select>
-                <input className="input-field" value={currentMessage} onChange={e => setCurrentMessage(e.target.value)} style={{ flex: 1 }} placeholder="Shift+Enter for newline, Enter to send secure message..." />
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <label className="btn-primary" style={{ padding: '12px', cursor: 'pointer', background: 'rgba(255,255,255,0.05)', boxShadow: 'none' }}><Hash size={20} /><input type="file" hidden accept="image/*" onChange={handleFileUpload} /></label>
-                  <button className="btn-primary" type="submit" style={{ padding: '12px 24px' }}><Send size={20} /></button>
-                </div>
-              </form>
+              {/* Chat Input Box - Always at the bottom */}
+              <div style={{ padding: '24px', borderTop: '1px solid var(--glass-border)', background: 'rgba(2, 6, 23, 0.4)' }}>
+                <form onSubmit={sendMessage} style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                  <select value={burnTimer} onChange={e => setBurnTimer(e.target.value)} className="input-field" style={{ padding: '12px', fontSize: '0.75rem', width: 'auto' }}>
+                    <option value="none">Standard</option>
+                    <option value="1m">1m Burn</option>
+                    <option value="5m">5m Burn</option>
+                  </select>
+                  <input className="input-field" value={currentMessage} onChange={e => setCurrentMessage(e.target.value)} style={{ flex: 1 }} placeholder="Type a message..." />
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <label className="btn-primary" style={{ padding: '12px', background: 'rgba(255,255,255,0.05)', boxShadow: 'none', border: '1px solid var(--glass-border)' }}><Plus size={20} /><input type="file" hidden accept="image/*" onChange={handleFileUpload} /></label>
+                    <button className="btn-primary" type="submit" style={{ padding: '12px 24px' }}><Send size={20} /></button>
+                  </div>
+                </form>
+              </div>
             </div>
 
-            {/* Right Side Member Panel */}
+            {/* Right Member Panel */}
             {showActiveMembers && (
-              <div className="animate-fade-in" style={{ width: '280px', borderLeft: '1px solid var(--glass-border)', background: 'rgba(255,255,255,0.01)', display: 'flex', flexDirection: 'column' }}>
-                <div style={{ padding: '20px', borderBottom: '1px solid var(--glass-border)', opacity: 0.4, fontSize: '0.75rem', fontWeight: '800', letterSpacing: '0.1em' }}>ACTIVE MEMBERS</div>
+              <div className="animate-fade-in" style={{ width: '300px', borderLeft: '1px solid var(--glass-border)', background: 'rgba(255,255,255,0.01)', display: 'flex', flexDirection: 'column' }}>
+                <div style={{ padding: '20px', borderBottom: '1px solid var(--glass-border)', opacity: 0.4, fontSize: '0.7rem', fontWeight: '800', letterSpacing: '0.1em' }}>MEMBER REGISTRY</div>
                 <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   {activeUsers.map(u => (
-                    <div key={u.id} className="glass-container" style={{ padding: '14px', border: '1px solid var(--glass-border)', background: 'rgba(255,255,255,0.02)' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '10px' }}>
+                    <div key={u.id} className="glass-container" style={{ padding: '16px', border: '1px solid var(--glass-border)', background: 'rgba(255,255,255,0.02)', borderRadius: '20px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
                         <div style={{ position: 'relative' }}>
                           <img src={u.picture || `https://api.dicebear.com/7.x/avataaars/svg?seed=${u.username}`} style={{ width: '32px', height: '32px', borderRadius: '50%' }} alt="" />
                           <div style={{ position: 'absolute', bottom: 0, right: 0, width: '8px', height: '8px', background: '#10b981', borderRadius: '50%', border: '2px solid #0f172a' }}></div>
                         </div>
-                        <p style={{ fontSize: '0.85rem', fontWeight: '700', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.username} {u.email === creatorEmail && '👑'}</p>
+                        <p style={{ fontSize: '0.85rem', fontWeight: '700' }}>{u.username} {u.email === creatorEmail && '👑'}</p>
                       </div>
-                      <div style={{ display: 'flex', gap: '6px' }}>
-                        <button onClick={() => startPrivateChat(u)} disabled={u.email === userProfile.email} style={{ flex: 1, background: 'rgba(99, 102, 241, 0.1)', border: 'none', borderRadius: '8px', color: '#818cf8', fontSize: '0.7rem', padding: '6px', cursor: 'pointer', opacity: u.email === userProfile.email ? 0.2 : 1, fontWeight: '700' }}>Message</button>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button onClick={() => startPrivateChat(u)} disabled={u.email === userProfile.email} style={{ flex: 1, background: 'rgba(99, 102, 241, 0.1)', color: '#818cf8', border: 'none', borderRadius: '10px', fontSize: '0.7rem', padding: '8px', cursor: 'pointer', opacity: u.email === userProfile.email ? 0.3 : 1 }}>Secure DM</button>
                         {userProfile.email === creatorEmail && u.email !== creatorEmail && (
-                          <button onClick={() => kickUser(u.email)} style={{ background: 'rgba(255,68,68,0.1)', border: 'none', borderRadius: '8px', color: '#ff4444', fontSize: '0.7rem', padding: '6px 10px', cursor: 'pointer' }}>Kick</button>
+                          <button onClick={() => kickUser(u.email)} style={{ background: 'rgba(255,68,68,0.1)', color: '#ff4444', border: 'none', borderRadius: '10px', fontSize: '0.7rem', padding: '8px' }}>Kick</button>
                         )}
                       </div>
                     </div>
@@ -437,15 +464,15 @@ function App() {
         {/* Room Info Modal */}
         {showRoomDetails && (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(2, 6, 23, 0.9)', zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(10px)' }}>
-            <div className="glass-container animate-fade-in" style={{ padding: '40px', width: '380px' }}>
-              <h3 style={{ fontSize: '1.4rem', fontWeight: '800', marginBottom: '24px' }}>Space Parameters</h3>
-              <p style={{ fontSize: '0.75rem', fontWeight: '800', opacity: 0.4, marginBottom: '6px', letterSpacing: '0.05em' }}>WORKSPACE IDENTIFIER</p>
-              <p style={{ fontWeight: '800', fontSize: '1.1rem', marginBottom: '20px', color: 'var(--primary)' }}>#{currentRoomId}</p>
-              <p style={{ fontSize: '0.75rem', fontWeight: '800', opacity: 0.4, marginBottom: '6px', letterSpacing: '0.05em' }}>MASTER ENCRYPTION KEY</p>
-              <div style={{ padding: '16px', background: 'rgba(255,255,255,0.03)', borderRadius: '12px', border: '1px solid var(--glass-border)', marginBottom: '28px' }}>
-                <code style={{ fontSize: '0.95rem', color: '#6366f1', wordBreak: 'break-all' }}>{roomCode}</code>
+            <div className="glass-container animate-fade-in" style={{ padding: '40px', width: '400px' }}>
+              <h3 style={{ fontSize: '1.4rem', fontWeight: '800', marginBottom: '24px' }}>Security Protocol</h3>
+              <p style={{ fontSize: '0.7rem', fontWeight: '800', opacity: 0.4, marginBottom: '6px' }}>MESH ID</p>
+              <p style={{ fontWeight: '800', fontSize: '1.2rem', marginBottom: '20px', color: 'var(--primary)' }}>#{currentRoomId}</p>
+              <p style={{ fontSize: '0.7rem', fontWeight: '800', opacity: 0.4, marginBottom: '6px' }}>AES-256 SEED</p>
+              <div style={{ padding: '16px', background: 'rgba(255,255,255,0.03)', borderRadius: '16px', border: '1px solid var(--glass-border)', marginBottom: '30px' }}>
+                <code style={{ fontSize: '0.9rem', color: '#6366f1', wordBreak: 'break-all' }}>{roomCode}</code>
               </div>
-              <button onClick={() => setShowRoomDetails(false)} className="btn-primary" style={{ width: '100%', height: '52px' }}>Acknowledge</button>
+              <button onClick={() => setShowRoomDetails(false)} className="btn-primary" style={{ width: '100%' }}>Dismiss</button>
             </div>
           </div>
         )}
@@ -456,24 +483,16 @@ function App() {
   // 2. Waiting Screen
   if (isJoined) {
     return (
-      <div className="flex-center" style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div className="glass-container animate-fade-in animate-float" style={{ padding: '50px', width: '450px', textAlign: 'center' }}>
-          <div style={{ marginBottom: '30px', position: 'relative', display: 'inline-block' }}>
-            <Shield size={64} color="#6366f1" className="pulse-glow" style={{ borderRadius: '50%' }} />
-          </div>
-          <h2 style={{ fontSize: '1.6rem', fontWeight: '800' }}>{membershipStatus === 'pending' ? 'Verification Required' : 'Synchronizing Mesh...'}</h2>
-          <p style={{ opacity: 0.6, fontSize: '0.95rem', marginTop: '16px', lineHeight: '1.5' }}>
+      <div className="flex-center">
+        <div className="glass-container animate-fade-in animate-float" style={{ padding: '60px', width: '480px', textAlign: 'center' }}>
+          <Shield size={64} color="#6366f1" className="pulse-glow" style={{ borderRadius: '50%', marginBottom: '30px' }} />
+          <h2 style={{ fontSize: '1.8rem', fontWeight: '800', marginBottom: '16px' }}>{membershipStatus === 'pending' ? 'Access Denied' : 'Synchronizing...'}</h2>
+          <p style={{ opacity: 0.6, fontSize: '0.95rem', lineHeight: '1.6' }}>
             {membershipStatus === 'pending'
-              ? 'Your access request has been transmitted. The room owner must manually verify your identity before decryption keys are shared.'
-              : 'Verifying keys and synchronizing encrypted message history with the mesh network...'}
+              ? 'Your identity is being verified by the Mesh Administrator. Stand by for end-to-end key synchronization.'
+              : 'Verifying master keys and downloading encrypted message shards...'}
           </p>
-          <button
-            className="btn-primary"
-            style={{ marginTop: '35px', background: 'transparent', border: '2px solid var(--glass-border)', boxShadow: 'none', color: '#94a3b8' }}
-            onClick={() => setIsJoined(false)}
-          >
-            Abort Connection
-          </button>
+          <button className="btn-primary" style={{ marginTop: '40px', width: '100%', background: 'transparent', border: '2px solid var(--glass-border)', color: '#94a3b8' }} onClick={() => setIsJoined(false)}>Cancel Request</button>
         </div>
       </div>
     );
@@ -481,119 +500,49 @@ function App() {
 
   // 3. Welcome View
   return (
-    <div className="flex-center" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
-      <div className="glass-container animate-fade-in animate-float" style={{ padding: '50px 40px', width: '450px', position: 'relative', overflow: 'hidden' }}>
-        {/* Glow background elements */}
-        <div style={{ position: 'absolute', top: '-10%', left: '-10%', width: '40%', height: '40%', background: 'radial-gradient(circle, var(--primary-glow) 0%, transparent 70%)', zIndex: 0, opacity: 0.4 }}></div>
-        <div style={{ position: 'absolute', bottom: '-10%', right: '-10%', width: '40%', height: '40%', background: 'radial-gradient(circle, var(--secondary-glow) 0%, transparent 70%)', zIndex: 0, opacity: 0.4 }}></div>
+    <div className="flex-center">
+      <div className="glass-container animate-fade-in animate-float" style={{ padding: '60px 40px', width: '460px', textAlign: 'center' }}>
+        <Shield size={64} color="#6366f1" className="pulse-glow" style={{ borderRadius: '50%', marginBottom: '30px' }} />
+        <h1 className="gradient-text" style={{ fontSize: '3.5rem', fontWeight: '800', marginBottom: '8px' }}>SecureChat</h1>
+        <p style={{ opacity: 0.5, fontSize: '1.1rem', marginBottom: '40px' }}>E2EE Protocol Active</p>
 
-        <div style={{ position: 'relative', zIndex: 1, textAlign: 'center' }}>
-          <div style={{ display: 'inline-flex', padding: '20px', background: 'rgba(99, 102, 241, 0.15)', borderRadius: '24px', marginBottom: '28px', border: '1px solid rgba(99, 102, 241, 0.2)', boxShadow: '0 0 30px rgba(99, 102, 241, 0.2)' }}>
-            <Shield size={42} color="#6366f1" className="pulse-glow" style={{ borderRadius: '50%' }} />
-          </div>
-          <h1 className="gradient-text" style={{ fontSize: '3rem', fontWeight: '800', marginBottom: '8px', letterSpacing: '-0.02em' }}>SecureChat</h1>
-          <p style={{ opacity: 0.6, fontSize: '1.1rem', fontWeight: '400', marginBottom: '40px' }}>Zero-Knowledge Messaging</p>
-
-          {!userProfile ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
-              <div style={{ display: 'flex', justifyContent: 'center' }}>
-                <GoogleLogin
-                  onSuccess={handleLoginSuccess}
-                  theme="filled_black"
-                  shape="pill"
-                  size="large"
-                />
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.08)' }}></div>
-                <span style={{ fontSize: '0.7rem', opacity: 0.3, letterSpacing: '0.1em', fontWeight: '700' }}>OR IDENTITY AS GUEST</span>
-                <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.08)' }}></div>
-              </div>
-
-              <form onSubmit={handleGuestLogin} style={{ display: 'flex', gap: '10px' }}>
-                <div style={{ position: 'relative', flex: 1 }}>
-                  <User size={18} style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)', opacity: 0.4 }} />
-                  <input className="input-field" placeholder="Create temporary alias" value={guestName} onChange={e => setGuestName(e.target.value)} style={{ width: '100%', paddingLeft: '48px' }} />
-                </div>
-                <button className="btn-primary" type="submit" style={{ padding: '0 24px' }}>Go</button>
-              </form>
+        {!userProfile ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+              <GoogleLogin onSuccess={handleLoginSuccess} theme="filled_black" shape="pill" size="large" />
             </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              <div className="glass-container" style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '18px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--glass-border)' }}>
-                <div style={{ position: 'relative' }}>
-                  <img src={userProfile.picture} style={{ width: '48px', height: '48px', borderRadius: '50%', border: '2px solid var(--primary)' }} alt="" />
-                  <div style={{ position: 'absolute', bottom: 0, right: 0, width: '10px', height: '10px', background: '#10b981', borderRadius: '50%', border: '2px solid #0f172a' }}></div>
-                </div>
-                <div style={{ flex: 1, textAlign: 'left' }}>
-                  <p style={{ fontWeight: '800', fontSize: '1.05rem' }}>{userProfile.name}</p>
-                  <p style={{ fontSize: '0.8rem', opacity: 0.4 }}>{userProfile.email}</p>
-                </div>
-                <button onClick={() => setUserProfile(null)} style={{ background: 'rgba(255,68,68,0.1)', border: 'none', color: '#ff4444', borderRadius: '10px', padding: '10px', cursor: 'pointer' }}><LogOut size={18} /></button>
-              </div>
-
-              <div style={{ display: 'flex', gap: '12px' }}>
-                <button className="btn-primary" style={{ flex: 1, height: '56px' }} onClick={() => setShowCreateModal('create')}><MessageSquare size={18} /> Create</button>
-                <button className="btn-primary" style={{ flex: 1, height: '56px', background: 'rgba(255,255,255,0.05)', color: 'white', border: '1px solid var(--glass-border)', boxShadow: 'none' }} onClick={() => setShowCreateModal('join')}><Hash size={18} /> Join</button>
-              </div>
-
-              {myRooms.length > 0 && (
-                <div style={{ marginTop: '15px', textAlign: 'left' }}>
-                  <p style={{ fontSize: '0.75rem', fontWeight: '800', opacity: 0.4, marginBottom: '15px', letterSpacing: '0.05em' }}>PREVIOUS SESSIONS</p>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    {myRooms.slice(0, 3).map(r => (
-                      <button key={r.id} onClick={() => handleJoinRoom(r.id, r.room_code || '')} className="glass-container" style={{ width: '100%', textAlign: 'left', padding: '16px 20px', cursor: 'pointer', border: '1px solid var(--glass-border)', background: 'rgba(255,255,255,0.01)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                          <div style={{ width: '8px', height: '8px', background: 'var(--primary)', borderRadius: '50%' }}></div>
-                          <span style={{ fontWeight: '700' }}>{r.name}</span>
-                        </div>
-                        <Hash size={14} style={{ opacity: 0.4 }} />
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+              <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.08)' }}></div>
+              <span style={{ fontSize: '0.7rem', opacity: 0.3, fontWeight: '800' }}>OR LOCAL GUEST</span>
+              <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.08)' }}></div>
             </div>
-          )}
-
-          <div style={{ marginTop: '40px', padding: '22px', background: 'rgba(99, 102, 241, 0.05)', borderRadius: '24px', display: 'flex', gap: '16px', backdropFilter: 'blur(5px)' }}>
-            <Lock size={26} color="#6366f1" style={{ flexShrink: 0 }} />
-            <p style={{ fontSize: '0.85rem', opacity: 0.5, lineHeight: '1.6', textAlign: 'left' }}>
-              Military-grade AES-256-GCM encryption is applied locally. Your keys never traverse our infrastructure.
-            </p>
+            <form onSubmit={handleGuestLogin} style={{ display: 'flex', gap: '10px' }}>
+              <input className="input-field" placeholder="Temporary Alias" value={guestName} onChange={e => setGuestName(e.target.value)} style={{ flex: 1 }} />
+              <button className="btn-primary" type="submit">Start</button>
+            </form>
           </div>
-        </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            <button className="btn-primary" style={{ height: '60px', fontSize: '1.1rem' }} onClick={() => handleJoinRoom(myRooms[0]?.id, myRooms[0]?.room_code)} disabled={!myRooms.length}>Resume Last Session</button>
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button className="btn-primary" style={{ flex: 1 }} onClick={() => setShowCreateModal('create')}>Create New</button>
+              <button className="btn-primary" style={{ flex: 1, background: 'rgba(255,255,255,0.05)', boxShadow: 'none', border: '1px solid var(--glass-border)' }} onClick={() => setShowCreateModal('join')}>Join Existing</button>
+            </div>
+          </div>
+        )}
       </div>
 
       {showCreateModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(2, 6, 23, 0.95)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(12px)' }}>
-          <div className="glass-container animate-fade-in" style={{ padding: '45px', width: '420px', border: '1px solid var(--primary)', boxShadow: '0 0 60px rgba(99, 102, 241, 0.2)' }}>
-            <div style={{ textAlign: 'center', marginBottom: '35px' }}>
-              <h2 style={{ fontSize: '2rem', fontWeight: '800', marginBottom: '10px' }}>{showCreateModal === 'join' ? 'Secure Access' : 'New Mesh Init'}</h2>
-              <p style={{ opacity: 0.4, fontSize: '0.9rem' }}>{showCreateModal === 'join' ? 'Verify identity to decrypt synchronization' : 'Declare a new end-to-end encrypted channel'}</p>
-            </div>
-            <form onSubmit={showCreateModal === 'join' ? (e) => { e.preventDefault(); handleJoinRoom(currentRoomId, roomCode); } : handleCreateRoom} style={{ display: 'flex', flexDirection: 'column', gap: '22px' }}>
-              {showCreateModal === 'create' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <label style={{ fontSize: '0.75rem', fontWeight: '800', opacity: 0.4, marginLeft: '6px' }}>CHANNEL NAME</label>
-                  <input className="input-field" placeholder="e.g. Project Overload" value={roomName} onChange={e => setRoomName(e.target.value)} required />
-                </div>
-              )}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <label style={{ fontSize: '0.75rem', fontWeight: '800', opacity: 0.4, marginLeft: '6px' }}>MESH IDENTIFIER</label>
-                <input className="input-field" placeholder="#OVERLOAD" value={currentRoomId} onChange={e => setCurrentRoomId(e.target.value.toUpperCase())} required />
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <label style={{ fontSize: '0.75rem', fontWeight: '800', opacity: 0.4, marginLeft: '6px' }}>ENCRYPTION SEED</label>
-                <div style={{ position: 'relative' }}>
-                  <Lock size={18} style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)', opacity: 0.3 }} />
-                  <input className="input-field" placeholder="Input secret passkey" type="password" value={roomCode} onChange={e => setRoomCode(e.target.value)} required style={{ width: '100%', paddingLeft: '48px' }} />
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: '14px', marginTop: '12px' }}>
-                <button className="btn-primary" type="submit" style={{ flex: 2, height: '60px', fontSize: '1.1rem' }}>{showCreateModal === 'join' ? 'Synchronize' : 'Birth Channel'}</button>
-                <button className="btn-primary" type="button" onClick={() => setShowCreateModal(false)} style={{ flex: 1, background: 'rgba(255,255,255,0.05)', color: 'white', border: '1px solid var(--glass-border)', boxShadow: 'none' }}>Abort</button>
+          <div className="glass-container animate-fade-in" style={{ padding: '45px', width: '420px' }}>
+            <h2 style={{ fontSize: '2rem', fontWeight: '800', textAlign: 'center', marginBottom: '30px' }}>{showCreateModal === 'join' ? 'Secure Entry' : 'Channel Birth'}</h2>
+            <form onSubmit={showCreateModal === 'join' ? (e) => { e.preventDefault(); handleJoinRoom(currentRoomId, roomCode); } : handleCreateRoom} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              <input className="input-field" placeholder="Mesh ID (Required)" value={currentRoomId} onChange={e => setCurrentRoomId(e.target.value.toUpperCase())} required />
+              {showCreateModal === 'create' && <input className="input-field" placeholder="Label (e.g. Sales Team)" value={roomName} onChange={e => setRoomName(e.target.value)} required />}
+              <input className="input-field" placeholder="Secret Key (E2EE Seed)" type="password" value={roomCode} onChange={e => setRoomCode(e.target.value)} required />
+              <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                <button className="btn-primary" type="submit" style={{ flex: 2 }}>{showCreateModal === 'join' ? 'Connect' : 'Initialize'}</button>
+                <button className="btn-primary" type="button" onClick={() => setShowCreateModal(false)} style={{ flex: 1, background: 'transparent', boxShadow: 'none', border: '1px solid var(--glass-border)' }}>Abort</button>
               </div>
             </form>
           </div>

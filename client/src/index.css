@@ -31,10 +31,15 @@ body {
   background-attachment: fixed;
   color: #f8fafc;
   min-height: 100vh;
+  margin: 0;
   overflow-x: hidden;
+}
+
+.flex-center {
   display: flex;
   align-items: center;
   justify-content: center;
+  min-height: 100vh;
 }
 
 .glass-container {
@@ -174,7 +179,7 @@ body {
   background: rgba(255, 255, 255, 0.2);
 }
 
-/* Chat Layout adjustments */
+/* Chat Layout */
 .messages-container {
   scrollbar-gutter: stable;
 }
@@ -182,6 +187,24 @@ body {
 .message {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
   transition: transform 0.2s;
+  max-width: 80%;
+  margin-bottom: 24px;
+  padding: 16px;
+  border-radius: 20px;
+}
+
+.message.sent {
+  align-self: flex-end;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.15) 0%, rgba(99, 102, 241, 0.05) 100%);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-bottom-right-radius: 4px;
+}
+
+.message.received {
+  align-self: flex-start;
+  background: var(--glass-light);
+  border: 1px solid var(--glass-border);
+  border-bottom-left-radius: 4px;
 }
 
 .message:hover {
